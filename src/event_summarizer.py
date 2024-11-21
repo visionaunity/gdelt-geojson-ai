@@ -1,26 +1,29 @@
 import logging
+import ollama
 from typing import Dict, List, Any
-from llama_cpp import Llama
+from os import getenv
 
 logger = logging.getLogger(__name__)
 
 class EventSummarizer:
-    def __init__(self, model_path: str = "models/llama-2-7b.gguf"):
+    def __init__(self, model_name: str = "llama2"):
         """
-        Initialize the event summarizer with a local LLM model.
+        Initialize the event summarizer with Ollama model.
         
         Args:
-            model_path (str): Path to the local LLM model file
+            model_name (str): Name of the Ollama model to use
         """
+        self.model_name = model_name
         try:
-            self.llm = Llama(model_path=model_path)
+            # Test connection to Ollama
+            ollama.pull(self.model_name)
         except Exception as e:
-            logger.error(f"Failed to load LLM model: {str(e)}")
+            logger.error(f"Failed to initialize Ollama model: {str(e)}")
             raise
             
     def summarize_events(self, events_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Summarize events using the LLM.
+        Summarize events using Ollama.
         
         Args:
             events_data (Dict): Raw event data from GDELT
@@ -43,7 +46,7 @@ class EventSummarizer:
         
     def _generate_summary(self, event: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Generate a summary for a single event using the LLM.
+        Generate a summary for a single event using Ollama.
         
         Args:
             event (Dict): Single event data
@@ -51,14 +54,37 @@ class EventSummarizer:
         Returns:
             Dict containing the summarized event with metadata
         """
-        # TODO: Implement actual LLM summarization
-        # This is a placeholder
-        return {
-            "summary": "Event summary placeholder",
-            "location": {
-                "lat": 0.0,
-                "lon": 0.0
-            },
-            "timestamp": event.get("date", ""),
-            "tone": event.get("tone", 0.0)
-        } 
+        try:
+            # Create a prompt for the model
+            prompt = f"""
+            Summarize the following event in a concise manner:
+            Event: {event.get('description', '')}
+            Location: {event.get('location', '')}
+            Date: {event.get('date', '')}
+            
+            Provide a brief, factual summary focusing on the key details.
+            """
+            
+            # Get response from Ollama
+            response = ollama.generate(
+                model=self.model_name,
+                prompt=prompt,
+                temperature=0.7,
+                max_tokens=100
+            )
+            
+            summary = response['response'].strip()
+            
+            return {
+                "summary": summary,
+                "location": {
+                    "lat": event.get("latitude", 0.0),
+                    "lon": event.get("longitude", 0.0)
+                },
+                "timestamp": event.get("date", ""),
+                "tone": event.get("tone", 0.0)
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to generate summary: {str(e)}")
+            raise 

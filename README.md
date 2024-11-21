@@ -1,10 +1,10 @@
 # GDELT GeoJSON Generator with LLM Summarization
 
-This project retrieves daily event updates from the GDELT Event Database, summarizes significant events using a local LLM (e.g., Llama 3.2), and generates a GeoJSON file for visualization.
+This project retrieves daily event updates from the GDELT Event Database, summarizes significant events using Ollama (local LLM), and generates a GeoJSON file for visualization.
 
 ## Features
 - **Daily PDF Retrieval**: Downloads the GDELT daily trend report based on the current date.
-- **Event Summarization**: Uses a local LLM to analyze and summarize key events.
+- **Event Summarization**: Uses Ollama to analyze and summarize key events.
 - **GeoJSON Output**: Converts summarized events into a GeoJSON file for geospatial applications.
 
 ## Prerequisites
@@ -13,7 +13,8 @@ This project retrieves daily event updates from the GDELT Event Database, summar
   - `requests`
   - `pandas`
   - `geojson`
-  - LLM backend library (e.g., `llama_cpp` or similar)
+  - `ollama`
+- **Ollama**: Must be installed and running locally
 - **GDELT Daily Reports**: Ensure internet access for retrieving daily PDFs.
 
 ## Installation
@@ -23,24 +24,38 @@ This project retrieves daily event updates from the GDELT Event Database, summar
    cd gdelt-geojson-generator
    ```
 
-2. Install dependencies:
+2. Install Ollama:
+   ```bash
+   # For macOS/Linux
+   curl https://ollama.ai/install.sh | sh
+   
+   # For other systems, visit: https://ollama.ai/download
+   ```
+
+3. Pull the required model:
+   ```bash
+   ollama pull llama2
+   ```
+
+4. Install Python dependencies:
    ```bash
    pip install -r requirements.txt
    ```
 
-3. Set up your local LLM (e.g., Llama 3.2):
-   - Follow Llama 3.2 installation guide.
-   - Ensure the model is running locally and accessible via API.
-
 ## Usage
-Run the GeoJSON Generator:
-```bash
-python main.py
-```
+1. Start the Ollama service:
+   ```bash
+   ollama serve
+   ```
+
+2. Run the GeoJSON Generator:
+   ```bash
+   python main.py
+   ```
 
 ### Workflow:
 1. Fetches the GDELT daily PDF using the current date.
-2. Summarizes events using the LLM.
+2. Summarizes events using Ollama.
 3. Outputs `events.geojson` in the project directory.
 
 ## Output Example

@@ -1,5 +1,5 @@
 requests>=2.31.0
 pandas>=2.2.0
 geojson>=3.1.0
-llama-cpp-python>=0.2.0
-python-dotenv>=1.0.0 
+python-dotenv>=1.0.0
+ollama>=0.1.6 
