@@ -7,6 +7,9 @@ import os
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 from urllib3.exceptions import InsecureRequestWarning
+from bs4 import BeautifulSoup
+import time
+import re
 
 # Suppress only the single InsecureRequestWarning
 requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
@@ -49,6 +52,9 @@ class GDELTFetcher:
         self.max_days_back = max_days_back
         self.save_files = save_files
         self.data_dir = "data/gdelt_downloads"
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
         
         if self.save_files:
             os.makedirs(self.data_dir, exist_ok=True)
@@ -145,16 +151,80 @@ class GDELTFetcher:
             logger.error(f"Failed to fetch GDELT data: {str(e)}")
             raise
             
+    def _fetch_article_details(self, url: str) -> Dict[str, Any]:
+        """
+        Fetch and parse article details from the source URL.
+        
+        Args:
+            url (str): The article URL
+            
+        Returns:
+            Dict containing extracted article details
+        """
+        try:
+            logger.info(f"Fetching article details from: {url}")
+            response = requests.get(url, headers=self.headers, verify=self.verify_ssl, timeout=10)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Try to extract article details
+            details = {
+                "title": None,
+                "description": None,
+                "published_date": None,
+                "location": None,
+                "content": None
+            }
+            
+            # Try different meta tags for title
+            details["title"] = (
+                soup.find('meta', property='og:title')
+                or soup.find('meta', {'name': 'twitter:title'})
+                or soup.find('title')
+            )
+            if details["title"]:
+                details["title"] = details["title"].get('content', None) or details["title"].string
+                
+            # Try different meta tags for description
+            details["description"] = (
+                soup.find('meta', property='og:description')
+                or soup.find('meta', {'name': 'description'})
+                or soup.find('meta', {'name': 'twitter:description'})
+            )
+            if details["description"]:
+                details["description"] = details["description"].get('content', None)
+                
+            # Try to find publication date
+            date_meta = (
+                soup.find('meta', property='article:published_time')
+                or soup.find('time')
+                or soup.find('meta', {'name': 'publication_date'})
+            )
+            if date_meta:
+                details["published_date"] = date_meta.get('content', None) or date_meta.get('datetime', None)
+                
+            # Try to extract main content
+            article_body = soup.find('article') or soup.find('main') or soup.find('div', class_=re.compile(r'article|content|story'))
+            if article_body:
+                # Clean up the content
+                for tag in article_body.find_all(['script', 'style', 'nav', 'header', 'footer']):
+                    tag.decompose()
+                details["content"] = ' '.join(article_body.stripped_strings)[:500]  # First 500 chars
+            
+            logger.info(f"Successfully extracted article details from {url}")
+            logger.debug(f"Extracted details: {details}")
+            
+            return details
+            
+        except Exception as e:
+            logger.warning(f"Failed to fetch article details from {url}: {str(e)}")
+            return {}
+
     def _parse_csv(self, content: bytes) -> Dict[str, Any]:
         """
         Parse the zipped CSV content into a structured format.
-        Limited to the 10 most recent events.
-        
-        Args:
-            content (bytes): Raw CSV content (zipped)
-            
-        Returns:
-            Dict containing parsed event data
+        Now with enhanced article details.
         """
         try:
             zip_buffer = io.BytesIO(content)
@@ -174,10 +244,10 @@ class GDELTFetcher:
                     logger.info("Parsing CSV data with pandas...")
                     df = pd.read_csv(
                         csv_file,
-                        sep='\t',  # GDELT uses tab-separated values
-                        names=self.COLUMNS,  # Use predefined column names
-                        dtype={'SQLDATE': str},  # Keep date as string
-                        nrows=10  # Changed from 1000 to 10 rows
+                        sep='\t',
+                        names=self.COLUMNS,
+                        dtype={'SQLDATE': str},
+                        nrows=10
                     )
                     
             logger.info(f"Successfully parsed {len(df)} events from CSV (limited to 10 most recent)")
@@ -188,12 +258,13 @@ class GDELTFetcher:
             # Convert DataFrame to list of events
             events = []
             for _, row in df.iterrows():
+                url = row['SOURCEURL']
+                
+                # First get basic event info
                 event = {
                     "id": row['GLOBALEVENTID'],
                     "date": row['SQLDATE'],
-                    "description": f"{row['Actor1Name'] or 'Unknown Actor'} - "
-                                 f"{row['EventCode']} - "
-                                 f"{row['Actor2Name'] or 'Unknown Target'}",
+                    "url": url,
                     "location": row['ActionGeo_FullName'],
                     "latitude": row['ActionGeo_Lat'],
                     "longitude": row['ActionGeo_Long'],
@@ -204,20 +275,55 @@ class GDELTFetcher:
                         "num_mentions": row['NumMentions'],
                         "num_sources": row['NumSources'],
                         "num_articles": row['NumArticles'],
-                        "source_url": row['SOURCEURL']
+                        "actor1": row['Actor1Name'],
+                        "actor2": row['Actor2Name']
                     }
                 }
+                
+                # Then enhance with article details
+                try:
+                    article_details = self._fetch_article_details(url)
+                    
+                    # Use the best available description
+                    event["description"] = (
+                        article_details.get("description")
+                        or article_details.get("title")
+                        or self._extract_title_from_url(url)
+                    )
+                    
+                    # Add additional metadata
+                    event["metadata"].update({
+                        "article_title": article_details.get("title"),
+                        "article_date": article_details.get("published_date"),
+                        "article_content_preview": article_details.get("content")
+                    })
+                    
+                    logger.info(f"Enhanced event data with article details")
+                    logger.info(f"Final description: {event['description'][:150]}...")
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to enhance event with article details: {str(e)}")
+                    # Fall back to URL-based title
+                    event["description"] = self._extract_title_from_url(url)
+                
                 events.append(event)
+                logger.info("-" * 30)
+                
+                # Be nice to servers
+                time.sleep(1)
             
-            logger.info(f"Converted {len(events)} events to structured format")
             return {"events": events}
             
-        except zipfile.BadZipFile:
-            logger.error("Failed to extract ZIP file - content may be corrupted")
-            raise
-        except pd.errors.EmptyDataError:
-            logger.error("CSV file is empty")
-            return {"events": []}
         except Exception as e:
             logger.error(f"Error parsing CSV data: {str(e)}")
-            raise 
+            raise
+
+    def _extract_title_from_url(self, url: str) -> str:
+        """Extract a title from URL as fallback"""
+        try:
+            url_parts = [p for p in url.split('/') if p]
+            title = url_parts[-1].replace('-', ' ').replace('_', ' ')
+            title = title.split('.')[0].strip()
+            return ' '.join(word.capitalize() for word in title.split())
+        except:
+            return "No title available"
