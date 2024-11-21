@@ -34,7 +34,7 @@ This project retrieves daily event updates from the GDELT Event Database, summar
 
 3. Pull the required model:
    ```bash
-   ollama pull llama2
+   ollama pull llama3.2
    ```
 
 4. Install Python dependencies:
