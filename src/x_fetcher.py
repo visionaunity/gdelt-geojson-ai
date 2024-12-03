@@ -117,28 +117,58 @@ class XFetcher:
         
         for post in posts:
             try:
-                # Extract text and basic metadata
                 text = post.get('text', '')
                 created_at = post.get('created_at')
                 
-                # Try to extract location information
-                location_info = self._extract_location(post, text)
+                # Extract locations from entities annotations
+                locations = []
+                if 'entities' in post and 'annotations' in post['entities']:
+                    for annotation in post['entities']['annotations']:
+                        if annotation.get('type') == 'Place':
+                            locations.append(annotation.get('normalized_text'))
+                            logger.info(f"Found place annotation: {annotation.get('normalized_text')}")
                 
-                if location_info:
-                    processed_post = {
-                        "id": post.get('id'),
-                        "text": text,
-                        "created_at": created_at,
-                        "location": location_info.get('name'),
-                        "latitude": location_info.get('latitude'),
-                        "longitude": location_info.get('longitude'),
-                        "location_type": location_info.get('type'),
-                        "country": location_info.get('country'),
-                        "url": f"https://twitter.com/i/web/status/{post.get('id')}"
-                    }
-                    
-                    processed_posts.append(processed_post)
-                    logger.info(f"Processed post with location: {location_info['name']}")
+                # Extract locations from text using more specific patterns
+                location_matches = re.findall(r'in ([\w\s,]+)(?=\s|$)|at ([\w\s,]+)(?=\s|$)|near ([\w\s,]+)(?=\s|$)', text)
+                for match in location_matches:
+                    locations.extend([loc.strip() for loc in match if loc.strip()])
+                
+                logger.info(f"Found locations in text: {locations}")
+                
+                # Try to geocode each location
+                for location_name in locations:
+                    try:
+                        logger.info(f"Attempting to geocode: {location_name}")
+                        location = self.geocoder.geocode(location_name, timeout=10)
+                        
+                        if location:
+                            processed_post = {
+                                "id": post.get('id'),
+                                "text": text,
+                                "created_at": created_at,
+                                "location": location_name,
+                                "latitude": location.latitude,
+                                "longitude": location.longitude,
+                                "location_type": "geocoded",
+                                "country": location.raw.get('address', {}).get('country'),
+                                "url": f"https://twitter.com/i/web/status/{post.get('id')}",
+                                "raw_location_data": {
+                                    "address": location.address,
+                                    "raw": location.raw
+                                }
+                            }
+                            
+                            processed_posts.append(processed_post)
+                            logger.info(f"Successfully geocoded location: {location_name}")
+                            logger.info(f"Coordinates: {location.latitude}, {location.longitude}")
+                            break  # Use the first successfully geocoded location
+                            
+                    except GeocoderTimedOut:
+                        logger.warning(f"Geocoding timed out for location: {location_name}")
+                        continue
+                    except Exception as e:
+                        logger.warning(f"Failed to geocode location {location_name}: {str(e)}")
+                        continue
                 
             except Exception as e:
                 logger.warning(f"Failed to process post {post.get('id')}: {str(e)}")
@@ -148,6 +178,15 @@ class XFetcher:
             time.sleep(1)
         
         logger.info(f"Successfully processed {len(processed_posts)} posts with location data")
+        
+        # Save processed locations to a separate file for debugging
+        if self.save_files:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filepath = os.path.join(self.data_dir, f'processed_locations_{timestamp}.json')
+            with open(filepath, 'w') as f:
+                json.dump(processed_posts, f, indent=2)
+            logger.info(f"Saved processed locations to: {filepath}")
+        
         return processed_posts
 
     def _extract_location(self, post: Dict[str, Any], text: str) -> Dict[str, Any]:
